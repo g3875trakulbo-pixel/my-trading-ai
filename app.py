@@ -2,32 +2,34 @@ import streamlit as st
 import pandas as pd
 import re, io
 
-st.set_page_config(page_title="ระบบส่งงาน", layout="wide")
+st.set_page_config(page_title="ระบบส่งงานครูตระกูล", layout="wide")
 
-# 1. จัดการ Session (จำไฟล์งาน ไม่จำรูปโปรไฟล์)
+# ระบบหน่วยความจำชั่วคราว (จำไฟล์งานในเซสชัน ไม่จำรูปโปรไฟล์)
 if 'fs' not in st.session_state: st.session_state.fs = {}
 if 'sl' not in st.session_state: st.session_state.sl = ""
 
-# 2. Header
+# --- Header ---
 c1, c2 = st.columns([1, 5])
 c1.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=120)
-c2.title("📋 ระบบส่งงาน - ครูตระกูล บุญชิต")
+c2.markdown("## 📋 ระบบสรุปการส่งงานและรวมคะแนน")
+c2.caption("👨‍🏫 **คุณครูตระกูล บุญชิต** | โรงเรียนตระกาศประชาสามัคคี")
 
-# 3. อัปโหลดและจัดการไฟล์ (จำไว้ใช้ต่อได้)
+st.markdown("---")
+
+# --- การจัดการไฟล์ (จำไว้ใช้ต่อได้) ---
 up = st.file_uploader("อัปโหลดไฟล์", type=["csv", "xlsx"], accept_multiple_files=True, label_visibility="collapsed")
 if up:
     for f in up: st.session_state.fs[f.name] = f.getvalue()
     if not st.session_state.sl: st.session_state.sl = up[0].name
 
-# ปุ่มเลือกไฟล์ (สั้น กระทัดรัด)
 if st.session_state.fs:
     btns = st.columns(len(st.session_state.fs))
     for i, name in enumerate(st.session_state.fs.keys()):
-        if btns[i].button(f"📄 {name[:10]}", key=name):
+        if btns[i].button(f"📄 {name[:10]}", key=name, use_container_width=True):
             st.session_state.sl = name
             st.rerun()
 
-# 4. ประมวลผลข้อมูล
+# --- ประมวลผลและคำนวณคะแนน ---
 if st.session_state.sl:
     fn = st.session_state.sl
     raw = st.session_state.fs[fn]
@@ -49,20 +51,30 @@ if st.session_state.sl:
                 'กิจกรรม': ac.group(1) if ac else None, 'สถานะ': '✓'
             })
         
-        df_r = pd.DataFrame(res)
-        st.success(f"📍 ไฟล์ปัจจุบัน: {fn}")
+        df_r = pd.DataFrame(res).dropna(subset=['กิจกรรม'])
         
-        # ตาราง Pivot
-        pv = df_r.dropna(subset=['กิจกรรม']).drop_duplicates(['เลขที่','ชื่อ','กิจกรรม']).pivot(
+        # 1. สร้าง Pivot Table
+        pv = df_r.drop_duplicates(['เลขที่','ชื่อ','กิจกรรม']).pivot(
             index=['เลขที่','ชื่อ','นามสกุล','กลุ่ม'], columns='กิจกรรม', values='สถานะ'
-        ).fillna('-').reset_index().sort_values('เลขที่')
+        ).fillna('-').reset_index()
+
+        # 2. จัดเรียงคอลัมน์กิจกรรม 1.1, 1.2 ...
+        fixed = ['เลขที่','ชื่อ','นามสกุล','กลุ่ม']
+        acts = [c for c in pv.columns if c not in fixed]
+        acts.sort(key=lambda x: float(x) if re.match(r'^\d+\.?\d*$', x) else 999)
         
+        # 3. คำนวณคะแนนรวม (นับจำนวน ✓)
+        pv['คะแนนรวม'] = (pv[acts] == '✓').sum(axis=1)
+        
+        # จัดลำดับคอลัมน์ใหม่ (ข้อมูลพื้นฐาน + กิจกรรมที่เรียงแล้ว + คะแนนรวม)
+        pv = pv[fixed + acts + ['คะแนนรวม']].sort_values('เลขที่')
+        
+        st.success(f"📍 แสดงผล: {fn}")
         st.dataframe(pv, use_container_width=True)
         
-        # ปุ่มโหลด Excel
+        # ดาวน์โหลด
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='xlsxwriter') as w: pv.to_excel(w, index=False)
-        st.download_button("📥 โหลด Excel", out.getvalue(), f"สรุป_{fn}.xlsx")
+        st.download_button("📥 โหลด Excel (พร้อมคะแนน)", out.getvalue(), f"สรุปคะแนน_{fn}.xlsx")
         
-    except Exception as e:
-        st.error(f"เกิดข้อผิดพลาด: {e}")
+    except Exception as e: st.error(f"Error: {e}")
