@@ -4,110 +4,103 @@ import re
 import io
 
 # 1. ตั้งค่าหน้าแอป
-st.set_page_config(page_title="ระบบส่งงาน", layout="wide")
+st.set_page_config(page_title="ระบบสรุปการส่งงาน", layout="wide")
 
-# --- ส่วนหัว: Layout ตามที่คุณต้องการ (ไม่มีการบันทึกภาพลงเครื่อง) ---
+# --- ระบบหน่วยความจำ (จำเฉพาะไฟล์งาน ไม่จำรูปโปรไฟล์) ---
+if 'file_storage' not in st.session_state:
+    st.session_state['file_storage'] = {}  # เก็บ {ชื่อไฟล์: ข้อมูล bytes}
+if 'selected_file' not in st.session_state:
+    st.session_state['selected_file'] = ""
+
+# --- ส่วนหัว: (ใช้รูป Default เสมอ ไม่เก็บประวัติภาพ) ---
 head_col1, head_col2 = st.columns([1, 5])
-
 with head_col1:
-    # ใช้รูป Icon หรือ URL รูปประจำตัวแบบ Static
     st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=140)
-
 with head_col2:
-    st.title("ระบบส่งงาน")
+    st.title("📋 ระบบสรุปการส่งงาน")
     st.subheader("โรงเรียนตระกาศประชาสามัคคี")
-    st.write("คุณครูตระกูล บุญชิต")
+    st.write("👨‍🏫 **คุณครูตระกูล บุญชิต**")
 
 st.markdown("---")
 
-# --- ฟังก์ชันจัดการข้อมูล (เน้นความแม่นยำในการสกัดชื่อและเลขกิจกรรม) ---
-def process_data_logic(uploaded_file):
+# --- ฟังก์ชันประมวลผลข้อมูล ---
+def process_data(raw_bytes, file_name):
     try:
-        raw_bytes = uploaded_file.getvalue()
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(raw_bytes), encoding='utf-8-sig')
-        else:
-            df = pd.read_excel(io.BytesIO(raw_bytes))
-        
+        data_io = io.BytesIO(raw_bytes)
+        df = pd.read_csv(data_io, encoding='utf-8-sig') if file_name.endswith('.csv') else pd.read_excel(data_io)
         df.columns = [str(c).strip() for c in df.columns]
+        
         if 'ผู้เขียน' in df.columns:
             df = df[~df['ผู้เขียน'].str.contains("ตระกูล", na=False)]
             
-        temp_results = []
+        results = []
         for _, row in df.iterrows():
             txt = f"{row.get('เรื่อง', '')} {row.get('เนื้อหา', '')} {row.get('ผู้เขียน', '')}"
-            
-            # สกัดเลขที่ (เรียงลำดับได้ถูกต้อง)
-            st_no_match = re.search(r'เลขที่\s*(\d+)', txt)
-            st_no = st_no_match.group(1) if st_no_match else "999"
-            
-            # สกัดชื่อ-นามสกุล
-            nm_match = re.search(r'(นาย|นางสาว|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง)\s*([^\s\d]+)\s+([^\s\d]+)', txt)
-            if nm_match:
-                fname, lname = nm_match.group(2), nm_match.group(3)
-            else:
-                raw_name = str(row.get('ผู้เขียน', 'ไม่ระบุ')).split('(')[0].strip()
-                prefixes = [r'^นาย', r'^นางสาว', r'^ด\.ช\.', r'^ด\.ญ\.', r'^เด็กชาย', r'^เด็กหญิง', r'^ดช\.', r'^ดญ\.']
-                for p in prefixes: raw_name = re.sub(p, '', raw_name).strip()
-                parts = raw_name.split(maxsplit=1)
-                fname = parts[0] if len(parts) > 0 else "-"
-                lname = parts[1] if len(parts) > 1 else "-"
-            
-            # สกัดกลุ่ม
-            sec_txt = str(row.get('ส่วน', ''))
-            g_num = re.search(r'(กลุ่มที่\s*\d+)', sec_txt)
-            g_name = re.search(r'\)\s*(.*)', sec_txt)
-            group_display = f"{g_num.group(1) if g_num else ''} {g_name.group(1).strip() if g_name else sec_txt}".strip()
-            
-            # สกัดเลขกิจกรรม
+            no_match = re.search(r'เลขที่\s*(\d+)', txt)
             act_match = re.search(r'กิจกรรมที่\s*(\d+\.?\d*)', txt)
+            nm_match = re.search(r'(นาย|นางสาว|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง|ดช\.|ดญ\.)\s*([^\s\d]+)\s+([^\s\d]+)', txt)
             
-            temp_results.append({
-                'เลขที่': int(st_no) if st_no.isdigit() else 999,
-                'ชื่อ': fname, 
-                'นามสกุล': lname,
-                'ชื่อกลุ่ม': group_display,
+            results.append({
+                'เลขที่': int(no_match.group(1)) if no_match else 999,
+                'ชื่อ': nm_match.group(2) if nm_match else "-",
+                'นามสกุล': nm_match.group(3) if nm_match else "-",
+                'ชื่อกลุ่ม': str(row.get('ส่วน', '')).replace('กลุ่มที่', '').strip(),
                 'กิจกรรม': act_match.group(1) if act_match else None,
                 'สถานะ': '✓'
             })
-        return pd.DataFrame(temp_results)
-    except Exception as e:
-        st.error(f"เกิดข้อผิดพลาด: {e}")
-        return None
+        return pd.DataFrame(results)
+    except: return None
 
-# --- ส่วนอัปโหลดงาน (ไม่อัดประวัติลง Session State) ---
-uploaded_file = st.file_uploader("อัปโหลดไฟล์จาก Padlet", type=["csv", "xlsx", "xls"])
+# --- ส่วนอัปโหลดงาน (เพิ่มเข้าหน่วยความจำ) ---
+st.markdown("### 📥 อัปโหลดไฟล์ใหม่")
+new_uploads = st.file_uploader("ลากไฟล์ CSV หรือ Excel มาวางที่นี่", type=["csv", "xlsx"], accept_multiple_files=True)
 
-if uploaded_file:
-    # แสดงผลทันทีที่อัปโหลด โดยไม่เก็บเข้าประวัติย้อนหลัง
-    st.success(f"📍 กำลังประมวลผลไฟล์: {uploaded_file.name}")
-    
-    df_res = process_data_logic(uploaded_file)
+if new_uploads:
+    for f in new_uploads:
+        st.session_state['file_storage'][f.name] = f.getvalue()
+    # ถ้ายังไม่มีไฟล์ที่เลือก ให้เลือกไฟล์แรกที่อัปโหลดขึ้นมา
+    if not st.session_state['selected_file']:
+        st.session_state['selected_file'] = new_uploads[0].name
+
+# --- ส่วนจัดการไฟล์ที่เคยอัปโหลดไว้ (จำไว้ใช้ต่อได้) ---
+if st.session_state['file_storage']:
+    st.markdown("### 📂 รายการไฟล์ที่พร้อมใช้งาน:")
+    for f_name in list(st.session_state['file_storage'].keys()):
+        c1, c2, c3 = st.columns([5, 1, 1])
+        with c1:
+            if f_name == st.session_state['selected_file']:
+                st.success(f"📍 กำลังแสดงผล: {f_name}")
+            else: st.write(f"📄 {f_name}")
+        with c2:
+            if st.button("เลือกใช้", key=f"use_{f_name}"):
+                st.session_state['selected_file'] = f_name
+                st.rerun()
+        with c3:
+            if st.button("🗑️ ลบ", key=f"del_{f_name}"):
+                del st.session_state['file_storage'][f_name]
+                if st.session_state['selected_file'] == f_name:
+                    st.session_state['selected_file'] = ""
+                st.rerun()
+    st.markdown("---")
+
+# --- แสดงผลตารางจากไฟล์ที่เลือก ---
+if st.session_state['selected_file']:
+    active_name = st.session_state['selected_file']
+    active_bytes = st.session_state['file_storage'][active_name]
+    df_res = process_data(active_bytes, active_name)
     
     if df_res is not None:
-        # 1. แสดงตารางสรุป
-        df_act = df_res[df_res['กิจกรรม'].notna()].copy()
+        st.subheader(f"📊 ผลสรุปจาก: {active_name}")
+        df_act = df_res[df_res['กิจกรรม'].notna()]
         if not df_act.empty:
-            st.subheader(f"📊 สรุปการส่งงานจากไฟล์ล่าสุด")
             pivot = df_act.drop_duplicates(subset=['เลขที่', 'ชื่อ', 'กิจกรรม']).pivot(
-                index=['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'], 
-                columns='กิจกรรม', 
-                values='สถานะ'
-            ).fillna('-').reset_index()
+                index=['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'],
+                columns='กิจกรรม', values='สถานะ'
+            ).fillna('-').reset_index().sort_values('เลขที่')
             
-            # เรียงตามเลขที่จริง (1, 2, 3...)
-            pivot = pivot.sort_values(by=['เลขที่', 'ชื่อ'])
             st.dataframe(pivot, use_container_width=True)
             
-            # ปุ่มดาวน์โหลด
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 pivot.to_excel(writer, index=False)
-            st.download_button(label="📥 ดาวน์โหลดไฟล์สรุป (Excel)", data=output.getvalue(), file_name="Summary.xlsx")
-
-        # 2. ตารางคนลืมระบุกิจกรรม
-        df_no_act = df_res[df_res['กิจกรรม'].isna()].copy()
-        if not df_no_act.empty:
-            st.markdown("---")
-            st.warning("⚠️ รายชื่อที่ระบบไม่พบเลขกิจกรรม")
-            st.table(df_no_act[['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม']].sort_values('เลขที่'))
+            st.download_button("📥 ดาวน์โหลดสรุป Excel", output.getvalue(), f"Summary_{active_name}.xlsx")
