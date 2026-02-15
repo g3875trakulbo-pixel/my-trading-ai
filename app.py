@@ -4,7 +4,7 @@ import re
 import io
 from datetime import datetime
 
-# 1. ตั้งค่าหน้าแอปให้กว้างและปิด Sidebar ไว้เพื่อความคลีน
+# 1. ตั้งค่าหน้าแอปให้กว้างและปิด Sidebar
 st.set_page_config(page_title="ระบบสรุปงานชีววิทยา ม.3", layout="wide", initial_sidebar_state="collapsed")
 
 # ระบบหน่วยความจำ (Session State)
@@ -17,7 +17,7 @@ st.title("📋 ระบบสรุปการส่งงานวิชา�
 st.write("จัดการงาน Padlet: อัปเดตไฟล์ล่าสุดได้ที่นี่ (แสดงประวัติย้อนหลัง 10 รายการ)")
 st.markdown("---")
 
-# --- ฟังก์ชันจัดการข้อมูล (แม่นยำและเสถียร) ---
+# --- ฟังก์ชันจัดการข้อมูล ---
 def clean_name_parts(raw_name):
     prefixes = [r'^นาย', r'^นางสาว', r'^ด\.ช\.', r'^ด\.ญ\.', r'^เด็กชาย', r'^เด็กหญิง', r'^ดช\.', r'^ดญ\.']
     s = str(raw_name).strip()
@@ -26,7 +26,6 @@ def clean_name_parts(raw_name):
     parts = s.split(maxsplit=1)
     fname = parts[0] if len(parts) > 0 else "-"
     lname = parts[1] if len(parts) > 1 else "-"
-    # ระบุรายชื่อไม่ชัดเจน (Unknown)
     return fname, lname, (not is_valid_thai or lname == "-")
 
 def get_group_info(section_text):
@@ -37,16 +36,8 @@ def get_group_info(section_text):
     res_name = g_name.group(1).strip() if g_name else ""
     return f"{res_num} {res_name}".strip() if res_num and res_name else (res_num or res_name or text)
 
-# --- ส่วนอัปโหลดไฟล์ (หน้าหลัก) ---
-col_u, col_c = st.columns([5, 1])
-with col_u:
-    uploaded_file = st.file_uploader("📥 อัปโหลดไฟล์เพื่อ Update ข้อมูลล่าสุด (CSV หรือ Excel)", type=["csv", "xlsx", "xls"])
-with col_c:
-    st.write(" ") # ปรับระยะ
-    if st.button("🗑️ ล้างข้อมูลทั้งหมด"):
-        st.session_state['processed_data'] = None
-        st.session_state['history'] = []
-        st.rerun()
+# --- ส่วนอัปโหลดไฟล์ (แสดงเดี่ยวๆ เพื่อความคลีน) ---
+uploaded_file = st.file_uploader("📥 อัปโหลดไฟล์เพื่อ Update ข้อมูลล่าสุด (CSV หรือ Excel)", type=["csv", "xlsx", "xls"])
 
 # ประมวลผลเมื่อมีการอัปโหลด
 if uploaded_file:
@@ -81,7 +72,7 @@ if uploaded_file:
         new_df = pd.DataFrame(temp_results)
         st.session_state['processed_data'] = new_df
         
-        # บันทึกประวัติ (เพิ่มเป็น 10 รายการล่าสุด)
+        # บันทึกประวัติ (10 รายการล่าสุด)
         current_time = datetime.now().strftime("%H:%M:%S (%d/%m)")
         st.session_state['history'].append({
             "file": uploaded_file.name,
@@ -89,7 +80,6 @@ if uploaded_file:
             "raw_file": raw_bytes
         })
         
-        # เก็บข้อมูลไว้สูงสุด 10 รายการ
         if len(st.session_state['history']) > 10:
             st.session_state['history'] = st.session_state['history'][-10:]
             
@@ -97,7 +87,7 @@ if uploaded_file:
     except Exception as e:
         st.error(f"เกิดข้อผิดพลาด: {e}")
 
-# --- ส่วนที่ 1: ประวัติการอัปโหลด (ขยายเป็น 10 รายการ) ---
+# --- ส่วนประวัติการอัปโหลด (อยู่ใต้ช่องอัปโหลดทันที) ---
 if st.session_state['history']:
     with st.expander(f"📜 ประวัติการอัปโหลด ({len(st.session_state['history'])} รายการล่าสุด)", expanded=True):
         for idx, item in enumerate(reversed(st.session_state['history'])):
@@ -114,19 +104,18 @@ if st.session_state['history']:
                     key=f"hist_{idx}"
                 )
 
-# --- ส่วนที่ 2: ตารางสรุปผลข้อมูลปัจจุบัน ---
+# --- ส่วนตารางสรุปผล ---
 if st.session_state['processed_data'] is not None:
     res_df = st.session_state['processed_data']
     st.markdown("---")
     
-    st.subheader("✅ 1. ตารางสรุปการส่งงาน ม.3 (ข้อมูลล่าสุด)")
+    st.subheader("✅ 1. ตารางสรุปการส่งงาน ม.3 (ล่าสุด)")
     df_act = res_df[res_df['กิจกรรม'].notna()].copy()
     if not df_act.empty:
         pivot = df_act.drop_duplicates(subset=['เลขที่', 'ชื่อ', 'นามสกุล', 'กิจกรรม']).pivot(
             index=['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม', 'is_unknown'], 
             columns='กิจกรรม', values='สถานะ').fillna('-').reset_index()
         
-        # จัดเรียงลำดับ: คนปกติ > เลขที่ > ชื่อ
         def sort_logic(row):
             no = int(row['เลขที่']) if str(row['เลขที่']).isdigit() else 999
             return (row['is_unknown'], no, row['ชื่อ'])
@@ -135,7 +124,6 @@ if st.session_state['processed_data'] is not None:
         pivot = pivot.sort_values('sort_key').drop(columns=['is_unknown', 'sort_key'])
         st.dataframe(pivot, use_container_width=True)
 
-        # ปุ่มดาวน์โหลดสรุป Excel
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             pivot.to_excel(writer, index=False)
@@ -143,7 +131,7 @@ if st.session_state['processed_data'] is not None:
 
     # ตารางตรวจสอบงานที่ไม่ได้ระบุกิจกรรม
     st.markdown("---")
-    st.subheader("⚠️ 2. ตารางตรวจสอบ (นับจำนวนงานที่ไม่ได้ระบุเลขกิจกรรม)")
+    st.subheader("⚠️ 2. ตารางตรวจสอบ (ลืมระบุเลขกิจกรรม)")
     df_no_act = res_df[res_df['กิจกรรม'].isna()].copy()
     if not df_no_act.empty:
         summ_no = df_no_act.groupby(['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม', 'is_unknown']).size().reset_index(name='จำนวนงาน')
