@@ -2,145 +2,144 @@ import streamlit as st
 import pandas as pd
 import re
 import io
-from PIL import Image
 
-# 1. ตั้งค่าหน้าแอป
-st.set_page_config(page_title="ระบบส่งงาน", layout="wide")
+# --- 1. Configuration & Constants ---
+st.set_page_config(page_title="ระบบส่งงาน - โรงเรียนตระกาศประชาสามัคคี", layout="wide")
 
-# ระบบหน่วยความจำ
-if 'current_files' not in st.session_state:
-    st.session_state['current_files'] = {}
-if 'active_file' not in st.session_state:
-    st.session_state['active_file'] = ""
-if 'processed_df' not in st.session_state:
-    st.session_state['processed_df'] = None
-if 'teacher_image' not in st.session_state:
-    st.session_state['teacher_image'] = None
+# กำหนดสไตล์ CSS เล็กน้อยเพื่อให้ตารางดูง่าย
+st.markdown("""
+    <style>
+    .stDataFrame { border: 1px solid #e6e9ef; border-radius: 10px; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- ส่วนหัว: รูปภาพและชื่อระบบ ---
-head_col1, head_col2 = st.columns([1, 5])
-
-with head_col1:
-    # แสดงรูปโปรไฟล์
-    if st.session_state['teacher_image']:
-        st.image(st.session_state['teacher_image'], width=140)
-    else:
-        st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=140)
+# --- 2. Helper Functions ---
+def extract_student_info(text, default_name="ไม่ระบุ"):
+    """ ฟังก์ชันสกัดข้อมูล เลขที่ และ ชื่อ-นามสกุล จากข้อความ """
+    # ค้นหาเลขที่
+    no_match = re.search(r'เลขที่\s*(\d+)', text)
+    st_no = no_match.group(1) if no_match else "999"
     
-    # --- ปุ่มอัปโหลดรูปภาพอยู่ใต้ภาพพอดี ---
-    uploaded_photo = st.file_uploader("", type=["jpg", "jpeg", "png"], key="teacher_up", label_visibility="collapsed")
-    if uploaded_photo:
-        st.session_state['teacher_image'] = uploaded_photo.getvalue()
-        st.rerun()
+    # ค้นหาชื่อ (รองรับคำนำหน้าหลายรูปแบบ)
+    name_pattern = r'(นาย|นางสาว|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง)\s*([^\s\d]+)\s+([^\s\d]+)'
+    nm_match = re.search(name_pattern, text)
+    
+    if nm_match:
+        return st_no, nm_match.group(2), nm_match.group(3)
+    
+    # กรณีหาชื่อด้วย Regex ไม่เจอ ให้ลบคำนำหน้าออกด้วยวิธีสะอาดๆ
+    clean_name = re.sub(r'^(นาย|นางสาว|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง|ดช\.|ดญ\.)', '', text.strip()).strip()
+    parts = clean_name.split(maxsplit=1)
+    return st_no, parts[0] if parts else "-", parts[1] if len(parts) > 1 else "-"
 
-with head_col2:
-    st.title("ระบบส่งงาน")
-    st.subheader("โรงเรียนตระกาศประชาสามัคคี")
-    st.write("คุณครูตระกูล บุญชิต")
-
-st.markdown("---")
-
-# --- ฟังก์ชันจัดการข้อมูลและการเรียงลำดับ ---
+@st.cache_data # เพิ่ม Cache เพื่อความเร็วในการประมวลผลไฟล์เดิม
 def process_data(raw_bytes, file_name):
     try:
-        if file_name.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(raw_bytes), encoding='utf-8-sig')
-        else:
-            df = pd.read_excel(io.BytesIO(raw_bytes))
+        data_io = io.BytesIO(raw_bytes)
+        df = pd.read_csv(data_io, encoding='utf-8-sig') if file_name.endswith('.csv') else pd.read_excel(data_io)
         
-        df.columns = [str(c).strip() for c in df.columns]
+        df.columns = df.columns.str.strip()
+        
+        # กรองผู้สอนออก (Case Insensitive)
         if 'ผู้เขียน' in df.columns:
-            df = df[~df['ผู้เขียน'].str.contains("ตระกูล", na=False)]
+            df = df[~df['ผู้เขียน'].str.contains("ตระกูล", na=False, case=False)]
             
         temp_results = []
         for _, row in df.iterrows():
-            txt = f"{row.get('เรื่อง', '')} {row.get('เนื้อหา', '')}"
-            st_no = re.search(r'เลขที่\s*(\d+)', txt)
-            nm_match = re.search(r'(นาย|นางสาว|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง)\s*([^\s\d]+)\s+([^\s\d]+)', txt)
+            content_text = f"{row.get('เรื่อง', '')} {row.get('เนื้อหา', '')} {row.get('ผู้เขียน', '')}"
             
-            raw_name = nm_match.group(0) if nm_match else str(row.get('ผู้เขียน', 'ไม่ระบุ')).split('(')[0].strip()
-            prefixes = [r'^นาย', r'^นางสาว', r'^ด\.ช\.', r'^ด\.ญ\.', r'^เด็กชาย', r'^เด็กหญิง', r'^ดช\.', r'^ดญ\.']
-            s = raw_name
-            for p in prefixes: s = re.sub(p, '', s).strip()
+            # สกัดข้อมูล
+            st_no, fname, lname = extract_student_info(content_text)
             
-            parts = s.split(maxsplit=1)
-            fname = parts[0] if len(parts) > 0 else "-"
-            lname = parts[1] if len(parts) > 1 else "-"
-            
+            # จัดการเรื่อง "กลุ่ม"
             sec_txt = str(row.get('ส่วน', ''))
             g_num = re.search(r'(กลุ่มที่\s*\d+)', sec_txt)
             g_name = re.search(r'\)\s*(.*)', sec_txt)
             group_display = f"{g_num.group(1) if g_num else ''} {g_name.group(1).strip() if g_name else sec_txt}".strip()
             
-            act_match = re.search(r'กิจกรรมที่\s*(\d+\.?\d*)', txt)
-            act_id = act_match.group(1) if act_match else None
+            # เลขกิจกรรม
+            act_match = re.search(r'กิจกรรมที่\s*(\d+\.?\d*)', content_text)
             
             temp_results.append({
-                'เลขที่': st_no.group(1) if st_no else "999",
+                'เลขที่': int(st_no) if st_no.isdigit() else 999,
                 'ชื่อ': fname, 
                 'นามสกุล': lname,
                 'ชื่อกลุ่ม': group_display,
-                'กิจกรรม': act_id,
+                'กิจกรรม': act_match.group(1) if act_match else None,
                 'สถานะ': '✓'
             })
+            
         return pd.DataFrame(temp_results)
-    except:
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์ {file_name}: {e}")
         return None
 
-# --- ส่วนอัปโหลดงาน (Bulk Upload) ---
-uploaded_files = st.file_uploader("", type=["csv", "xlsx", "xls"], accept_multiple_files=True, label_visibility="collapsed")
+# --- 3. UI logic ---
+# (ใช้ Session State เดิมของคุณแต่จัดกลุ่มให้ดูง่าย)
+for key in ['current_files', 'active_file', 'teacher_image']:
+    if key not in st.session_state:
+        st.session_state[key] = {} if key == 'current_files' else "" if key == 'active_file' else None
 
-if uploaded_files:
-    st.session_state['current_files'] = {f.name: f.getvalue() for f in uploaded_files}
-    if st.session_state['active_file'] not in st.session_state['current_files']:
-        first_file = list(st.session_state['current_files'].keys())[0]
-        st.session_state['active_file'] = first_file
-        st.session_state['processed_df'] = process_data(st.session_state['current_files'][first_file], first_file)
+# Layout ส่วนหัว
+head_col1, head_col2 = st.columns([1, 4])
+with head_col1:
+    img_url = st.session_state['teacher_image'] if st.session_state['teacher_image'] else "https://cdn-icons-png.flaticon.com/512/3135/3135715.png"
+    st.image(img_url, width=120)
+    uploaded_photo = st.file_uploader("เปลี่ยนรูป", type=["jpg", "png"], key="teacher_up", label_visibility="collapsed")
+    if uploaded_photo:
+        st.session_state['teacher_image'] = uploaded_photo.getvalue()
+        st.rerun()
 
-# --- ปุ่มเลือกไฟล์ที่อัปโหลด ---
+with head_col2:
+    st.title("🚀 ระบบสรุปการส่งงาน")
+    st.info(f"📍 กำลังใช้งาน: {st.session_state['active_file'] if st.session_state['active_file'] else 'ยังไม่ได้เลือกไฟล์'}")
+
+# อัปโหลดไฟล์
+files = st.file_uploader("เลือกไฟล์งาน (CSV/Excel)", type=["csv", "xlsx"], accept_multiple_files=True)
+if files:
+    new_files = {f.name: f.getvalue() for f in files}
+    st.session_state['current_files'] = new_files
+    if not st.session_state['active_file']:
+        st.session_state['active_file'] = list(new_files.keys())[0]
+
+# แสดงรายการไฟล์ (Sidebar หรือ Column)
 if st.session_state['current_files']:
-    for f_name in st.session_state['current_files'].keys():
-        f_col1, f_col2 = st.columns([5, 1])
-        with f_col1:
-            if f_name == st.session_state['active_file']:
-                st.success(f"📍 {f_name}")
-            else: st.write(f"📄 {f_name}")
-        with f_col2:
-            if st.button("🔄", key=f"sel_{f_name}"):
-                st.session_state['active_file'] = f_name
-                st.session_state['processed_df'] = process_data(st.session_state['current_files'][f_name], f_name)
+    with st.expander("📂 รายการไฟล์ที่อัปโหลด", expanded=True):
+        cols = st.columns(len(st.session_state['current_files']))
+        for idx, (name, content) in enumerate(st.session_state['current_files'].items()):
+            if cols[idx % 4].button(f"📄 {name[:15]}...", key=name):
+                st.session_state['active_file'] = name
                 st.rerun()
-    st.markdown("---")
 
-# --- ส่วนแสดงผลตาราง ---
-if st.session_state['processed_df'] is not None:
-    res_df = st.session_state['processed_df']
-    df_act = res_df[res_df['กิจกรรม'].notna()].copy()
-    if not df_act.empty:
-        pivot = df_act.drop_duplicates(subset=['เลขที่', 'ชื่อ', 'นามสกุล', 'กิจกรรม']).pivot(
-            index=['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'], 
-            columns='กิจกรรม', 
-            values='สถานะ'
-        ).fillna('-').reset_index()
-        
-        # เรียงลำดับ เลขที่ > ชื่อ > นามสกุล > กลุ่ม
-        pivot['no_int'] = pd.to_numeric(pivot['เลขที่'], errors='coerce').fillna(999).astype(int)
-        pivot = pivot.sort_values(by=['no_int', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'])
-        display_df = pivot.drop(columns=['no_int'])
-        
-        st.dataframe(display_df, use_container_width=True)
-        
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            display_df.to_excel(writer, index=False)
-        st.download_button(label="📥 Excel", data=output.getvalue(), file_name=f"สรุป_{st.session_state['active_file']}.xlsx")
+# --- 4. Main Processing & Display ---
+if st.session_state['active_file']:
+    active_name = st.session_state['active_file']
+    raw_data = st.session_state['current_files'][active_name]
+    res_df = process_data(raw_data, active_name)
+    
+    if res_df is not None:
+        # แยกข้อมูลที่มีกิจกรรมและไม่มีกิจกรรม
+        df_has_act = res_df[res_df['กิจกรรม'].notna()]
+        df_no_act = res_df[res_df['กิจกรรม'].isna()]
 
-    # ตารางตรวจสอบกรณีลืมระบุเลขกิจกรรม
-    df_no_act = res_df[res_df['กิจกรรม'].isna()].copy()
-    if not df_no_act.empty:
-        st.markdown("---")
-        st.subheader("⚠️")
-        summ_no = df_no_act.groupby(['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม']).size().reset_index(name='N')
-        summ_no['no_int'] = pd.to_numeric(summ_no['เลขที่'], errors='coerce').fillna(999).astype(int)
-        summ_no = summ_no.sort_values(by=['no_int', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'])
-        st.table(summ_no.drop(columns=['no_int']))
+        if not df_has_act.empty:
+            # สร้าง Pivot Table
+            pivot = df_has_act.drop_duplicates(subset=['เลขที่', 'ชื่อ', 'นามสกุล', 'กิจกรรม']).pivot(
+                index=['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'], 
+                columns='กิจกรรม', 
+                values='สถานะ'
+            ).fillna('-').reset_index()
+            
+            pivot = pivot.sort_values(['เลขที่', 'ชื่อ'])
+            st.subheader("📊 ตารางสรุปการส่งงาน")
+            st.dataframe(pivot, use_container_width=True)
+            
+            # ปุ่มดาวน์โหลด
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                pivot.to_excel(writer, index=False)
+            st.download_button("📥 ดาวน์โหลดไฟล์สรุป (Excel)", output.getvalue(), f"Summary_{active_name}.xlsx")
+
+        if not df_no_act.empty:
+            st.warning("⚠️ รายการที่ไม่ได้ระบุชื่อกิจกรรม")
+            st.table(df_no_act[['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม']].sort_values('เลขที่'))
