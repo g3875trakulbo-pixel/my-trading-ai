@@ -3,81 +3,47 @@ import cv2
 import numpy as np
 from PIL import Image
 
-# ตั้งค่าหน้าเว็บ
-st.set_page_config(page_title="กฎ 5 ข้อ - วิเคราะห์กราฟ", layout="centered")
+st.set_page_config(page_title="Trading AI - 6 Rules", layout="centered")
+st.title("📊 วิเคราะห์ตามกฎ 6 ข้อของคุณ")
 
-st.title("📊 ระบบวิเคราะห์แท่งถัดไปตามกฎของคุณ")
-st.write("อัปโหลดภาพกราฟเพื่อตรวจสอบแนวโน้ม: สี, ขึ้น/ลง, สั้น/ยาว")
-
-# ฟังก์ชันวิเคราะห์ภาพ (Core Logic)
-def analyze_rules(image):
-    # แปลงภาพจาก PIL เป็น OpenCV format
+def analyze_all_rules(image):
     img_array = np.array(image.convert('RGB'))
     img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
     h, w, _ = img_bgr.shape
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
 
-    # --- 1. ตัดส่วนวิเคราะห์ (Crop Zones) ---
-    # โดยประมาณ: แท่งกลาง (MACD) อยู่ช่วง 60-80%, แท่งล่าง (Volume) อยู่ช่วง 80-95%
-    macd_zone = img_bgr[int(h*0.6):int(h*0.8), int(w*0.8):w]
-    vol_zone = img_bgr[int(h*0.8):int(h*0.95), int(w*0.8):w]
+    # --- โซนวิเคราะห์ ---
+    macd_zone = hsv[int(h*0.65):int(h*0.8), int(w*0.7):w]
+    vol_zone = hsv[int(h*0.8):int(h*0.95), int(w*0.7):w]
+    price_zone = hsv[int(h*0.3):int(h*0.6), int(w*0.7):w]
 
-    # --- 2. ตรวจสอบสีและสถานะ (ใส/ทึบ) ---
-    # แปลงเป็น HSV เพื่อแยกสีได้แม่นยำ
-    hsv_macd = cv2.cvtColor(macd_zone, cv2.COLOR_BGR2HSV)
-    
-    # ช่วงสีเขียวและแดง
-    lower_green = np.array([40, 40, 40])
-    upper_green = np.array([80, 255, 255])
-    lower_red = np.array([0, 40, 40])
-    upper_red = np.array([10, 255, 255])
-
-    mask_g = cv2.inRange(hsv_macd, lower_green, upper_green)
-    mask_r = cv2.inRange(hsv_macd, lower_red, upper_red)
-
-    # ตรวจสอบความหนาแน่นของสี (ใส = มีสีขาว/พื้นหลังปนเยอะ, ทึบ = สีเต็ม)
+    # กฎ 1-4: สีและสถานะ MACD
+    mask_g = cv2.inRange(macd_zone, np.array([40, 40, 40]), np.array([80, 255, 255]))
+    mask_r = cv2.inRange(macd_zone, np.array([0, 40, 40]), np.array([10, 255, 255]))
     is_green = np.sum(mask_g) > np.sum(mask_r)
-    density = np.mean(mask_g if is_green else mask_r)
-    is_clear = density < 150  # ค่าสมมติ: ถ้าความเข้มสีน้อย = ใส
+    is_clear = np.mean(mask_g if is_green else mask_r) < 150
 
-    # --- 3. ตรวจสอบความยาว (Volume) ---
-    vol_gray = cv2.cvtColor(vol_zone, cv2.COLOR_BGR2GRAY)
-    _, thresh_vol = cv2.threshold(vol_gray, 50, 255, cv2.THRESH_BINARY)
-    vol_height = np.sum(thresh_vol > 0)
-    is_long = vol_height > 1000 # ค่าสมมติเทียบความสูงพิกเซล
+    # กฎข้อ 5: ความยาวแท่ง (Volume)
+    vol_mask = cv2.inRange(vol_zone, np.array([0, 0, 100]), np.array([180, 255, 255]))
+    is_long = np.sum(vol_mask > 0) > 1500 
 
-    # --- สรุปผลตามกฎของคุณ ---
-    res_color = ""
-    res_dir = ""
+    # กฎข้อ 6: ตำแหน่งเหนือ/ใต้เส้น (Moving Average)
+    mask_yellow = cv2.inRange(price_zone, np.array([20, 100, 100]), np.array([30, 255, 255]))
+    above_line = np.sum(mask_yellow) > 0 # เช็กว่ามีราคาอยู่โซนเส้นไหม
+
+    # ประมวลผลลัพธ์
+    res_color = "สีเขียว" if (is_green and is_clear) or (not is_green and not is_clear) else "สีแดง"
+    res_dir = "ขึ้น" if res_color == "สีเขียว" else "ลง"
     res_size = "ยาว" if is_long else "สั้น"
+    res_trend = "แข็งแกร่ง" if above_line else "อ่อนแรง"
 
-    if is_green:
-        if is_clear: # กฎข้อ 1: เขียวใส
-            res_color, res_dir = "สีเขียว", "ขึ้น"
-        else: # กฎข้อ 2: เขียวทึบ
-            res_color, res_dir = "สีแดง", "ลง"
-    else:
-        if is_clear: # กฎข้อ 3: แดงใส
-            res_color, res_dir = "สีแดง", "ลง"
-        else: # กฎข้อ 4: แดงทึบ
-            res_color, res_dir = "สีเขียว", "ขึ้น"
+    return f"{res_color}, {res_dir}, {res_size} ({res_trend})"
 
-    return f"{res_color}, {res_dir}, {res_size}"
+uploaded_file = st.file_uploader("อัปโหลดรูปกราฟ...", type=["jpg", "png", "jpeg"])
 
-# ส่วนการทำงานหน้าเว็บ
-uploaded_file = st.file_uploader("เลือกไฟล์ภาพ...", type=["jpg", "png", "jpeg"])
-
-if uploaded_file is not None:
-    image = Image.open(uploaded_file)
-    st.image(image, caption='ภาพที่กำลังวิเคราะห์', use_container_width=True)
-    
-    with st.spinner('กำลังวิเคราะห์ตามกฎของคุณ...'):
-        try:
-            result = analyze_rules(image)
-            st.markdown("---")
-            st.subheader("แนวโน้มแท่งถัดไปคือ:")
-            st.header(f"👉 {result}")
-        except Exception as e:
-            st.error("ไม่สามารถวิเคราะห์ภาพได้ กรุณาใช้ภาพที่เห็นแถบสีด้านล่างชัดเจน")
-
-st.markdown("---")
-st.caption("หมายเหตุ: ระบบวิเคราะห์ตามตำแหน่งพิกเซลและกฎสีที่คุณกำหนดไว้")
+if uploaded_file:
+    img = Image.open(uploaded_file)
+    st.image(img, use_container_width=True)
+    with st.spinner('กำลังวิเคราะห์ตามกฎ 6 ข้อ...'):
+        result = analyze_all_rules(img)
+        st.header(f"👉 {result}")
