@@ -1,113 +1,115 @@
 import streamlit as st
 import pandas as pd
 import re
+import io
 
-# ตั้งค่าหน้าเว็บ
-st.set_page_config(page_title="ระบบสรุปงาน Padlet", layout="wide")
+# 1. ตั้งค่าหน้าแอป
+st.set_page_config(page_title="ระบบสรุปงาน Padlet ม.3", layout="wide")
 
-st.title("📋 ระบบสรุปการส่งงาน (ม.3)")
-st.write("อัปโหลดไฟล์ 'โพสต์.csv' เพื่อสรุปรายคนรายกลุ่ม")
+st.title("📋 ระบบสรุปการส่งงานชีววิทยา")
+st.markdown("---")
 
-# ฟังก์ชันจัดการชื่อ (ตัดคำนำหน้าและแยกชื่อ-นามสกุล)
-def clean_student_name(full_text):
-    # รายการคำนำหน้าที่จะตัดออก
+# ฟังก์ชันล้างคำนำหน้าชื่อและแยก ชื่อ-นามสกุล
+def clean_name(raw_text):
     prefixes = [r'^นาย', r'^นางสาว', r'^ด\.ช\.', r'^ด\.ญ\.', r'^เด็กชาย', r'^เด็กหญิง', r'^ดช\.', r'^ดญ\.']
-    cleaned = str(full_text).strip()
+    s = str(raw_text).strip()
     for p in prefixes:
-        cleaned = re.sub(p, '', cleaned).strip()
+        s = re.sub(p, '', s).strip()
     
-    # แยกชื่อกับนามสกุลด้วยช่องว่าง
-    parts = cleaned.split(maxsplit=1)
-    fname = parts[0] if len(parts) > 0 else "-"
-    lname = parts[1] if len(parts) > 1 else "-"
-    return fname, lname
+    parts = s.split(maxsplit=1)
+    f_name = parts[0] if len(parts) > 0 else "-"
+    l_name = parts[1] if len(parts) > 1 else "-"
+    return f_name, l_name
 
-# ฟังก์ชันดึงชื่อกลุ่ม (กลุ่มที่ X [ชื่อกลุ่ม])
-def get_group_info(section_text):
-    text = str(section_text)
-    num_match = re.search(r'(กลุ่มที่\s*\d+)', text)
-    name_match = re.search(r'\)\s*(.*)', text)
-    g_num = num_match.group(1) if num_match else "ไม่ระบุกลุ่ม"
-    g_name = name_match.group(1).strip() if name_match else ""
-    return f"{g_num} {g_name}".strip()
+# ส่วนการอัปโหลดไฟล์
+file = st.file_uploader("อัปโหลดไฟล์ CSV จาก Padlet (ไฟล์โพสต์)", type=["csv"])
 
-# ส่วนอัปโหลด
-uploaded_file = st.file_uploader("เลือกไฟล์ CSV จาก Padlet", type=["csv"])
-
-if uploaded_file:
+if file:
     try:
         # อ่านไฟล์รองรับภาษาไทย
-        df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
-        df.columns = [c.strip() for c in df.columns]
-        
-        # กรองโพสต์ของคุณครูตระกูลออก
+        df = pd.read_csv(file, encoding='utf-8-sig')
+        df.columns = [str(c).strip() for c in df.columns]
+
+        # กรองโพสต์คุณครูออก
         if 'ผู้เขียน' in df.columns:
             df = df[~df['ผู้เขียน'].str.contains("ตระกูล", na=False)]
-        
-        data_list = []
+
+        final_data = []
         for _, row in df.iterrows():
             subject = str(row.get('เรื่อง', ''))
             content = str(row.get('เนื้อหา', ''))
-            full_text = f"{subject} {content}"
+            txt = subject + " " + content
             
-            # 1. ดึงเลขที่
-            no_match = re.search(r'เลขที่\s*(\d+)', full_text)
-            st_no = no_match.group(1) if no_match else "-"
+            # ดึงเลขที่
+            n_match = re.search(r'เลขที่\s*(\d+)', txt)
+            st_no = n_match.group(1) if n_match else "-"
             
-            # 2. ดึงชื่อ-นามสกุล
-            name_re = re.search(r'(นาย|นางสาว|ด\.ช\.|ด\.ญ\.)\s*([^\s\d]+)\s+([^\s\d]+)', full_text)
-            if name_re:
-                raw_name = name_re.group(0)
-            else:
-                raw_name = str(row.get('ผู้เขียน', 'Unknown')).split('(')[0].strip()
+            # ดึงชื่อ
+            nm_match = re.search(r'(นาย|นางสาว|ด\.ช\.|ด\.ญ\.)\s*([^\s\d]+)\s+([^\s\d]+)', txt)
+            full_raw = nm_match.group(0) if nm_match else str(row.get('ผู้เขียน', 'ไม่ระบุ')).split('(')[0]
+            fname, lname = clean_name(full_raw)
             
-            fname, lname = clean_student_name(raw_name)
+            # ดึงกลุ่ม
+            part_txt = str(row.get('ส่วน', ''))
+            g_num = re.search(r'(กลุ่มที่\s*\d+)', part_txt)
+            g_name = re.search(r'\)\s*(.*)', part_txt)
+            g_full = f"{g_num.group(1) if g_num else ''} {g_name.group(1).strip() if g_name else part_txt}".strip()
             
-            # 3. ดึงกลุ่มและกิจกรรม
-            group = get_group_info(row.get('ส่วน', ''))
-            act_match = re.search(r'กิจกรรมที่\s*(\d+\.?\d*)', full_text)
-            act_id = act_match.group(1) if act_match else None
+            # ดึงกิจกรรม
+            a_match = re.search(r'กิจกรรมที่\s*(\d+\.?\d*)', txt)
+            act_id = a_match.group(1) if a_match else None
             
-            # รวบรวมข้อมูล
-            data_list.append({
+            final_data.append({
                 'เลขที่': st_no,
                 'ชื่อ': fname,
                 'นามสกุล': lname,
-                'ชื่อกลุ่ม': group,
+                'ชื่อกลุ่ม': g_full,
                 'กิจกรรม': act_id,
                 'สถานะ': '✓'
             })
             
-        final_df = pd.DataFrame(data_list)
+        res_df = pd.DataFrame(final_data)
 
-        # --- ตารางที่ 1: ตารางสรุปงานที่มีเลขกิจกรรม ---
-        st.subheader("✅ ตารางสรุปการส่งงาน (แยกกิจกรรม 1.1 - 1.10)")
-        df_act = final_df[final_df['กิจกรรม'].notna()]
-        if not df_act.empty:
-            df_act = df_act.drop_duplicates(subset=['เลขที่', 'ชื่อ', 'นามสกุล', 'กิจกรรม'])
-            pivot = df_act.pivot(index=['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'], columns='กิจกรรม', values='สถานะ').fillna('-')
+        # --- ตารางที่ 1: สรุปคนระบุกิจกรรม ---
+        st.subheader("✅ 1. ตารางสรุปการส่งงาน (แยกกิจกรรม)")
+        df_ok = res_df[res_df['กิจกรรม'].notna()]
+        
+        if not df_ok.empty:
+            df_ok = df_ok.drop_duplicates(subset=['เลขที่', 'ชื่อ', 'นามสกุล', 'กิจกรรม'])
+            pivot = df_ok.pivot(
+                index=['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'], 
+                columns='กิจกรรม', 
+                values='สถานะ'
+            ).fillna('-')
             st.dataframe(pivot, use_container_width=True)
+            
+            # เตรียมไฟล์ Excel สำหรับดาวน์โหลด
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                pivot.to_excel(writer, sheet_name='Summary')
+            excel_data = output.getvalue()
+            st.download_button(
+                label="📥 ดาวน์โหลดตารางสรุปเป็น Excel",
+                data=excel_data,
+                file_name="สรุปส่งงาน_ชีววิทยา.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         else:
-            st.warning("ไม่พบการระบุเลขกิจกรรมที่ชัดเจนในไฟล์นี้")
+            st.warning("ไม่พบการระบุกิจกรรมในไฟล์")
 
-        # --- ตารางที่ 2: ตารางสุดท้าย (ส่งงานแล้วแต่ไม่ระบุกิจกรรม) ---
+        # --- ตารางที่ 2: ส่งงานแต่ไม่รู้จักกิจกรรม ---
         st.markdown("---")
-        st.subheader("❓ ตารางสุดท้าย (รายชื่อผู้ส่งงานแต่ไม่ระบุเลขกิจกรรม)")
-        df_no_act = final_df[final_df['กิจกรรม'].isna()].drop(columns=['กิจกรรม', 'สถานะ'])
-        df_no_act = df_no_act.drop_duplicates(subset=['ชื่อ', 'นามสกุล'])
+        st.subheader("❓ 2. ตารางท้ายสุด (ส่งงานแล้วแต่ไม่ได้พิมพ์เลขกิจกรรม)")
+        df_unk = res_df[res_df['กิจกรรม'].isna()].drop(columns=['กิจกรรม', 'สถานะ'])
+        df_unk = df_unk.drop_duplicates(subset=['ชื่อ', 'นามสกุล'])
         
-        # จัดเรียงตามเลขที่
-        def sort_func(x):
-            try: return int(x)
+        def sort_key(v):
+            try: return int(v)
             except: return 999
-        df_no_act['sort'] = df_no_act['เลขที่'].apply(sort_func)
-        df_no_act = df_no_act.sort_values('sort').drop(columns='sort')
+        df_unk['sort'] = df_unk['เลขที่'].apply(sort_key)
+        df_unk = df_unk.sort_values('sort').drop(columns='sort')
         
-        st.table(df_no_act)
-        
-        # ปุ่มดาวน์โหลด
-        csv_out = final_df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 ดาวน์โหลดไฟล์สรุป (CSV)", data=csv_out, file_name="summary.csv", mime="text/csv")
+        st.table(df_unk)
 
     except Exception as e:
         st.error(f"เกิดข้อผิดพลาด: {e}")
