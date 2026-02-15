@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 import io
+from PIL import Image
 
 # 1. ตั้งค่าหน้าแอป
 st.set_page_config(page_title="ระบบส่งงาน", layout="wide")
@@ -16,25 +17,26 @@ if 'processed_df' not in st.session_state:
 if 'teacher_image' not in st.session_state:
     st.session_state['teacher_image'] = None
 
-# --- ส่วนหัว: รูปภาพและชื่อ ---
-head_col1, head_col2, head_col3 = st.columns([1, 3, 2])
+# --- ส่วนหัว: รูปภาพและชื่อระบบ ---
+head_col1, head_col2 = st.columns([1, 5])
 
 with head_col1:
+    # แสดงรูปโปรไฟล์
     if st.session_state['teacher_image']:
         st.image(st.session_state['teacher_image'], width=140)
     else:
         st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=140)
+    
+    # --- ปุ่มอัปโหลดรูปภาพอยู่ใต้ภาพพอดี ---
+    uploaded_photo = st.file_uploader("", type=["jpg", "jpeg", "png"], key="teacher_up", label_visibility="collapsed")
+    if uploaded_photo:
+        st.session_state['teacher_image'] = uploaded_photo.getvalue()
+        st.rerun()
 
 with head_col2:
     st.title("ระบบส่งงาน")
     st.subheader("โรงเรียนตระกาศประชาสามัคคี")
-    st.write(f"คุณครูตระกูล บุญชิต")
-
-with head_col3:
-    uploaded_photo = st.file_uploader("📷", type=["jpg", "jpeg", "png"], key="teacher_up")
-    if uploaded_photo:
-        st.session_state['teacher_image'] = uploaded_photo.getvalue()
-        st.rerun()
+    st.write("คุณครูตระกูล บุญชิต")
 
 st.markdown("---")
 
@@ -74,7 +76,7 @@ def process_data(raw_bytes, file_name):
             act_id = act_match.group(1) if act_match else None
             
             temp_results.append({
-                'เลขที่': st_no.group(1) if st_no else "999", # ใส่ 999 เพื่อให้คนไม่มีเลขที่ไปอยู่ท้ายสุด
+                'เลขที่': st_no.group(1) if st_no else "999",
                 'ชื่อ': fname, 
                 'นามสกุล': lname,
                 'ชื่อกลุ่ม': group_display,
@@ -82,12 +84,11 @@ def process_data(raw_bytes, file_name):
                 'สถานะ': '✓'
             })
         return pd.DataFrame(temp_results)
-    except Exception as e:
-        st.error(f"Error: {e}")
+    except:
         return None
 
-# --- ส่วนอัปโหลด ---
-uploaded_files = st.file_uploader("📥", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+# --- ส่วนอัปโหลดงาน (Bulk Upload) ---
+uploaded_files = st.file_uploader("", type=["csv", "xlsx", "xls"], accept_multiple_files=True, label_visibility="collapsed")
 
 if uploaded_files:
     st.session_state['current_files'] = {f.name: f.getvalue() for f in uploaded_files}
@@ -96,7 +97,7 @@ if uploaded_files:
         st.session_state['active_file'] = first_file
         st.session_state['processed_df'] = process_data(st.session_state['current_files'][first_file], first_file)
 
-# --- รายชื่อไฟล์ ---
+# --- ปุ่มเลือกไฟล์ที่อัปโหลด ---
 if st.session_state['current_files']:
     for f_name in st.session_state['current_files'].keys():
         f_col1, f_col2 = st.columns([5, 1])
@@ -111,37 +112,30 @@ if st.session_state['current_files']:
                 st.rerun()
     st.markdown("---")
 
-# --- ส่วนแสดงผลตาราง (เน้นการ Sorting) ---
+# --- ส่วนแสดงผลตาราง ---
 if st.session_state['processed_df'] is not None:
     res_df = st.session_state['processed_df']
-    
     df_act = res_df[res_df['กิจกรรม'].notna()].copy()
     if not df_act.empty:
-        # 1. จัดทำ Pivot Table
         pivot = df_act.drop_duplicates(subset=['เลขที่', 'ชื่อ', 'นามสกุล', 'กิจกรรม']).pivot(
             index=['เลขที่', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'], 
             columns='กิจกรรม', 
             values='สถานะ'
         ).fillna('-').reset_index()
         
-        # 2. แปลงเลขที่ให้เป็นตัวเลขเพื่อการเรียงลำดับที่ถูกต้อง
+        # เรียงลำดับ เลขที่ > ชื่อ > นามสกุล > กลุ่ม
         pivot['no_int'] = pd.to_numeric(pivot['เลขที่'], errors='coerce').fillna(999).astype(int)
-        
-        # 3. สั่งเรียงลำดับ: เลขที่ > ชื่อ > นามสกุล > กลุ่ม
         pivot = pivot.sort_values(by=['no_int', 'ชื่อ', 'นามสกุล', 'ชื่อกลุ่ม'])
-        
-        # 4. ลบคอลัมน์ช่วยเรียงออกก่อนแสดงผล
         display_df = pivot.drop(columns=['no_int'])
         
         st.dataframe(display_df, use_container_width=True)
         
-        # ปุ่มดาวน์โหลด
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             display_df.to_excel(writer, index=False)
         st.download_button(label="📥 Excel", data=output.getvalue(), file_name=f"สรุป_{st.session_state['active_file']}.xlsx")
 
-    # ตารางลืมระบุเลขกิจกรรม
+    # ตารางตรวจสอบกรณีลืมระบุเลขกิจกรรม
     df_no_act = res_df[res_df['กิจกรรม'].isna()].copy()
     if not df_no_act.empty:
         st.markdown("---")
