@@ -1,81 +1,71 @@
 import streamlit as st
-import cv2
-import numpy as np
-from PIL import Image
+import pandas as pd
+import re
 
-# ตั้งค่าหน้าเว็บให้เหมาะสมกับการใช้งานบนมือถือ
-st.set_page_config(page_title="กฎ 6 ข้อ - ระบบวิเคราะห์กราฟ", layout="centered")
+st.set_page_config(page_title="ระบบสรุปงาน Padlet", layout="wide")
 
-st.markdown("""
-    <style>
-    .result-text { font-size: 28px; font-weight: bold; text-align: center; padding: 15px; border-radius: 10px; }
-    .rule-label { font-size: 18px; color: #555; }
-    </style>
-    """, unsafe_allow_html=True)
+st.title("📋 ระบบสรุปการส่งงานชีววิทยา (แยกรายกิจกรรม)")
+st.write("อัปโหลดไฟล์ 'โพสต์.csv' จาก Padlet เพื่อสรุปผล")
 
-st.title("📈 วิเคราะห์ตามกฎ 6 ข้อ")
-st.write("ระบบวิเคราะห์: ทิศทางตามสี MACD และความยาวตามตัวเลขแกนขวา")
-
-def analyze_logic(image):
-    # 1. แปลงไฟล์ภาพ
-    img_array = np.array(image.convert('RGB'))
-    img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-    h, w, _ = img_bgr.shape
-    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-
-    # 2. แบ่งโซนวิเคราะห์ (เน้นแกนขวาสำหรับวัดความยาว)
-    macd_zone = hsv[int(h*0.65):int(h*0.8), int(w*0.5):w]
-    vol_zone = hsv[int(h*0.8):int(h*0.95), int(w*0.7):w] # โซน Volume ติดแกนขวา
-    price_zone = hsv[int(h*0.3):int(h*0.6), int(w*0.5):w]
-
-    # --- กฎข้อ 1-4: ทิศทางจาก MACD (เน้นกฎข้อ 1 ที่หายไป) ---
-    mask_g = cv2.inRange(macd_zone, np.array([40, 40, 40]), np.array([80, 255, 255]))
-    mask_r = cv2.inRange(macd_zone, np.array([0, 40, 40]), np.array([10, 255, 255]))
+# ฟังก์ชันสำหรับจัดการชื่อและนามสกุล
+def clean_student_data(full_name_text):
+    # นำคำนำหน้าออก
+    prefixes = [r'^นาย', r'^นางสาว', r'^ด\.ช\.', r'^ด\.ญ\.', r'^เด็กชาย', r'^เด็กหญิง']
+    cleaned = full_name_text.strip()
+    for p in prefixes:
+        cleaned = re.sub(p, '', cleaned).strip()
     
-    is_green = np.sum(mask_g) > np.sum(mask_r)
-    density = np.mean(mask_g if is_green else mask_r)
-    is_clear = density < 140 # ค่าความเข้มต่ำ = ใส
+    parts = cleaned.split(maxsplit=1)
+    first = parts[0] if len(parts) > 0 else "-"
+    last = parts[1] if len(parts) > 1 else "-"
+    return first, last
 
-    # --- กฎข้อ 5: วัดความยาวแท่งอ้างอิงจากระดับพิกเซลแกนขวา ---
-    vol_mask = cv2.inRange(vol_zone, np.array([0, 0, 50]), np.array([180, 255, 255]))
-    coords = np.column_stack(np.where(vol_mask > 0))
-    if len(coords) > 0:
-        highest_point = np.min(coords[:, 0]) # จุดสูงสุดของแท่งเมื่อเทียบกับแกน
-        score = 100 - int((highest_point / vol_zone.shape[0]) * 100)
-    else:
-        score = 0
+# ฟังก์ชันดึงเลขกิจกรรม
+def extract_act(text):
+    match = re.search(r'กิจกรรมที่\s*(\d+\.?\d*)', str(text))
+    return match.group(1) if match else None
 
-    # --- กฎข้อ 6: ตรวจสอบเส้นแนวโน้ม ---
-    mask_line = cv2.inRange(price_zone, np.array([20, 100, 100]), np.array([30, 255, 255]))
-    is_strong = np.sum(mask_line) > 10
+# ฟังก์ชันดึงชื่อกลุ่ม
+def extract_group_name(part_text):
+    num_match = re.search(r'(กลุ่มที่\s*\d+)', str(part_text))
+    name_match = re.search(r'\).*(.*)', str(part_text))
+    g_num = num_match.group(1) if num_match else "ไม่ระบุกลุ่ม"
+    g_name = name_match.group(0).replace(')', '').strip() if name_match else ""
+    return f"{g_num} {g_name}".strip()
 
-    # --- ประมวลผลลัพธ์ตามกฎของคุณ ---
-    if is_green:
-        # กฎข้อ 1: เขียวใส = ขึ้น | กฎข้อ 2: เขียวทึบ = ลง
-        res_color, res_dir = ("สีเขียว", "ขึ้น") if is_clear else ("สีแดง", "ลง")
-    else:
-        # กฎข้อ 3: แดงใส = ลง | กฎข้อ 4: แดงทึบ = ขึ้น
-        res_color, res_dir = ("สีแดง", "ลง") if is_clear else ("สีเขียว", "ขึ้น")
-    
-    return res_color, res_dir, score, "แข็งแกร่ง" if is_strong else "อ่อนแรง"
-
-# ส่วนการอัปโหลดและแสดงผล
-uploaded_file = st.file_uploader("อัปโหลดรูปกราฟของคุณ...", type=["jpg", "png", "jpeg"])
+uploaded_file = st.file_uploader("เลือกไฟล์ CSV", type=["csv"])
 
 if uploaded_file:
-    img = Image.open(uploaded_file)
-    st.image(img, use_container_width=True)
+    df = pd.read_csv(uploaded_file)
     
-    color, direction, score, trend = analyze_logic(img)
+    # กรองโพสต์ของคุณครูออก
+    df = df[~df['ผู้เขียน'].str.contains("ตระกูล บุญชิต", na=False)]
     
-    st.markdown("---")
-    # ปรับสีตามทิศทาง
-    bg_color = "#D4EDDA" if direction == "ขึ้น" else "#F8D7DA"
-    text_color = "#155724" if direction == "ขึ้น" else "#721C24"
+    results = []
+    for _, row in df.iterrows():
+        content_text = f"{row['เรื่อง']} {row['เนื้อหา']}"
+        
+        # ดึงเลขที่
+        no_match = re.search(r'เลขที่\s*(\d+)', content_text)
+        no = no_match.group(1) if no_match else "-"
+        
+        # ดึงชื่อ
+        name_in_post = re.search(r'(นาย|นางสาว|ด\.ช\.|ด\.ญ\.)\s*([^\s\d]+)\s+([^\s\d]+)', content_text)
+        full_name = name_in_post.group(0) if name_in_post else str(row['ผู้เขียน']).split('(')[0].strip()
+        first, last = clean_student_data(full_name)
+        
+        group = extract_group_name(row['ส่วน'])
+        act = extract_act(content_text)
+        
+        results.append({
+            'เลขที่': no, 'ชื่อ': first, 'นามสกุล': last, 
+            'ชื่อกลุ่ม': group, 'กิจกรรม': act, 'สถานะ': '✓'
+        })
+
+    df_res = pd.DataFrame(results)
     
-    st.markdown(f"<div class='result-text' style='background-color: {bg_color}; color: {text_color};'>"
-                f"ผลลัพธ์: {color}, {direction}</div>", unsafe_allow_html=True)
-    
-    st.write(f"### 📏 ระดับความยาว (อ้างอิงแกนขวา): {score}%")
-    st.progress(score / 100)
-    st.info(f"สถานะแนวโน้ม (กฎข้อ 6): **{trend}**")
+    # --- ตารางที่ 1: คนที่ระบุกิจกรรมชัดเจน ---
+    st.subheader("1. สรุปผลการส่งงาน (ระบุกิจกรรมชัดเจน)")
+    df_act = df_res[df_res['กิจกรรม'].notna()]
+    if not df_act.empty:
+        pivot = df_act.pivot_table(
